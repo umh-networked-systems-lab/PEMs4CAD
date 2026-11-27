@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PEMs Visualizer</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#667;--card:#f4f6f9;--bd:#d5dbe3;--gt:#8a94a3;--ego:#2b6cb0;--est:#e8590c;--grid:#e3e8ee}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--fg:#e8eaed;--mut:#9aa4b2;--card:#1d2229;--bd:#323a45;--gt:#7d8795;--ego:#63a4ff;--est:#ff922b;--grid:#2a313b}}
+*{box-sizing:border-box}
+body{margin:0 auto;padding:16px;max-width:1100px;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif}
+h1{font-size:1.4rem;margin:0 0 4px}p.s{color:var(--mut);margin:0 0 14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px}
+.ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px}
+label{display:block;font-size:.85rem;color:var(--mut);margin-bottom:2px}
+select,input[type=range]{width:100%}select{padding:5px;background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:6px}
+b.v{color:var(--fg)}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+button{padding:9px 16px;border-radius:8px;border:1px solid var(--bd);background:var(--ego);color:#fff;font-size:.95rem;cursor:pointer}
+button.alt{background:var(--card);color:var(--fg)}
+.views{display:grid;grid-template-columns:3fr 2fr;gap:12px;margin-bottom:12px}
+@media(max-width:760px){.views{grid-template-columns:1fr}}
+canvas{width:100%;height:300px;display:block;background:var(--bg);border-radius:6px}
+.cap{font-size:.8rem;color:var(--mut);margin-top:4px;text-align:center}
+#out{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:4px 16px}
+.ok{color:#2f9e44;font-weight:600}.no{color:#e03131;font-weight:600}
+small{color:var(--mut)}
+</style></head><body>
+<h1>Perception Error Models: interactive visualizer</h1>
+<p class="s">Choose a LiDAR, a perception stage and the target's position, then draw samples from the PEMs.</p>
+
+<div class="card ctl">
+  <div><label>LiDAR type</label><select id="lidar"><option>OS2-128</option><option>OS2-64</option><option>OS1-64</option></select></div>
+  <div><label>Perception stage</label><select id="stage"><option>detection</option><option>validation</option></select></div>
+  <div><label>Distance: <b class="v" id="dv"></b> m <small id="dm"></small></label><input type="range" id="dist" min="1" max="240" step="1" value="100"></div>
+  <div><label>Angle θ: <b class="v" id="av"></b>°</label><input type="range" id="ang" min="-180" max="180" step="1" value="0"></div>
+  <div><label>Target heading (ground truth): <b class="v" id="hv"></b>°</label><input type="range" id="hdg" min="-180" max="180" step="1" value="0"></div>
+</div>
+<div class="btns"><button id="g1">Generate sample</button><button class="alt" id="g100">Generate 100 samples</button></div>
+
+<div class="views">
+  <div class="card"><canvas id="main"></canvas><div class="cap">Overview (ego-vehicle at the origin, x forward, y left)</div></div>
+  <div class="card"><canvas id="zoom"></canvas><div class="cap">Zoom on the target: ground truth (grey) vs. estimate (orange, dashed)</div></div>
+</div>
+<div class="card" id="out"></div>
+<p class="s" style="margin-top:12px"><small>JavaScript port of the Matlab/Python PEMs. Position and heading errors are sampled as absolute values with a random sign; the existence probability is capped at 1. Distances are limited to each configuration's domain. Where a model diverges near the end of its range, errors can become very large.</small></p>
+
+<script>
+// ---- Model functions: exponential, shifted exponential, linear ----
+const E=(a,b)=>d=>Math.exp(-Math.pow(a*d,b)), S=(a,b,c)=>d=>a+Math.exp(Math.pow(b*d,c)), L=(a,b)=>d=>a*d+b;
+const CFG={
+"OS2-128":{
+ detection:{D:240,p:E(.0057,7.05),xm:S(-.71,.0051,10),xs:S(-.9137,.004486,6.108),ym:L(.0005,.0335),ys:L(0,.0988),hm:S(.6258,.0063,2.2688),hs:S(.0137,.0082,2.3423),em:L(-.002,.8016),es:L(0,.0667)},
+ validation:{D:170,p:E(.0081,9.65),xm:L(0,.3),xs:L(0,.0871),ym:L(.0005,.0318),ys:L(.0008,.0296),hm:S(.5632,.0042,1.7398),hs:S(.1008,.0064,1.9705),em:L(-.0016,.8403),es:L(.0003,.0371)}},
+"OS2-64":{
+ detection:{D:190,p:E(.0079,6.05),xm:S(-.3164,.0012,1.349),xs:S(-.8982,.0071,23.8104),ym:L(.0008,.0129),ys:L(.0015,-.0103),hm:S(1.1403,.0074,215.8726),hs:S(.6499,.0075,125.0842),em:L(-.0031,.841),es:L(.0011,-.0396)},
+ validation:{D:160,p:E(.0113,6.1),xm:L(-.0003,.7027),xs:L(.0002,.0876),ym:L(.0008,.0123),ys:L(.0009,.0188),hm:S(.529,.0081,1.0384),hs:S(-.3466,.0097,.4994),em:L(-.0021,.8096),es:L(.0006,.0232)}},
+"OS1-64":{
+ detection:{D:120,p:E(.0145,7.1),xm:S(-.2972,.0012,15.8399),xs:S(-.9369,.0017,1.3642),ym:L(.0009,.0136),ys:L(.0015,.005),hm:S(.8533,.0096,1.9933),hs:S(-.2651,.0133,.9798),em:L(-.0052,.8484),es:L(.0008,.0232)},
+ validation:{D:100,p:E(.018,4.8),xm:L(.0017,.6516),xs:L(-.0003,.0868),ym:L(.001,.012),ys:L(.0008,.0237),hm:S(1.0038,.0133,166.8569),hs:S(-.49,.0174,.687),em:L(-.0058,.8607),es:L(.0007,.0242)}}
+};
+const dlim=(t,D)=>{const th=((t%180)+180)%180;return (th<15||th>=165)?D:((th>=15&&th<45)||(th>=135&&th<165))?50:20;};
+const randn=()=>Math.sqrt(-2*Math.log(1-Math.random()))*Math.cos(2*Math.PI*Math.random());
+const sgn=()=>Math.random()<.5?-1:1;
+function sample(c,d){
+  const p=c.p(d); if(Math.random()>=p) return {det:false,p};
+  return {det:true,p,
+    ex:sgn()*Math.abs(c.xm(d)+c.xs(d)*randn()), ey:sgn()*Math.abs(c.ym(d)+c.ys(d)*randn()),
+    eh:sgn()*Math.abs(c.hm(d)+c.hs(d)*randn()), ee:Math.min(Math.abs(c.em(d)+c.es(d)*randn()),1)};
+}
+// ---- UI state ----
+const $=id=>document.getElementById(id);
+const st={s:null,cloud:[],n:0,k:0};
+const cfg=()=>CFG[$("lidar").value][$("stage").value];
+const num=id=>+$(id).value;
+const f=(v,n)=>Number.isFinite(v)?v.toFixed(n):(v>0?"+∞":"−∞");
+const cl=v=>Number.isNaN(v)?0:Math.max(-1e4,Math.min(1e4,v));
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function sync(){
+  const c=cfg(), a=num("ang"), m=dlim(a,c.D);
+  $("dist").max=m; if(num("dist")>m) $("dist").value=m;
+  $("dv").textContent=num("dist"); $("av").textContent=a; $("hv").textContent=num("hdg");
+  $("dm").textContent="(max "+m+" m at this angle)";
+}
+function setup(cv){const r=cv.getBoundingClientRect(),k=devicePixelRatio||1;cv.width=r.width*k;cv.height=r.height*k;
+  const x=cv.getContext("2d");x.setTransform(k,0,0,k,0,0);return [x,r.width,r.height];}
+function car(x,px,py,h,s,col,fill,dash){
+  const l=4.5*s,w=1.9*s; x.save();x.translate(px,py);x.rotate(-h*Math.PI/180);
+  x.setLineDash(dash||[]);x.lineWidth=2;x.strokeStyle=col;x.fillStyle=fill;
+  x.beginPath();x.rect(-l/2,-w/2,l,w);x.fill();x.stroke();
+  x.beginPath();x.moveTo(0,0);x.lineTo(l/2,0);x.stroke();x.restore();
+}
+function drawMain(){
+  const [x,w,h]=setup($("main")), d=num("dist"), a=num("ang")*Math.PI/180, th=num("hdg"), S0=st.s;
+  const tx=d*Math.cos(a), ty=d*Math.sin(a);
+  const x0=Math.min(-8,tx-8), x1=Math.max(8,tx+8), y0=Math.min(-8,ty-8), y1=Math.max(8,ty+8);
+  const s=Math.min(w/(x1-x0),h/(y1-y0)), ox=w/2-(x0+x1)/2*s, oy=h/2+(y0+y1)/2*s;
+  const P=(X,Y)=>[ox+X*s,oy-Y*s], se=Math.max(s,3);
+  x.clearRect(0,0,w,h); x.font="12px system-ui";x.fillStyle=css("--mut");x.strokeStyle=css("--grid");x.lineWidth=1;
+  const [ex,ey]=P(0,0);
+  x.beginPath();x.moveTo(0,ey);x.lineTo(w,ey);x.moveTo(ex,0);x.lineTo(ex,h);x.stroke();
+  x.fillText("x",w-12,ey-6);x.fillText("y",ex+6,12);
+  const [gx,gy]=P(tx,ty);
+  x.setLineDash([4,4]);x.strokeStyle=css("--mut");x.beginPath();x.moveTo(ex,ey);x.lineTo(gx,gy);x.stroke();x.setLineDash([]);
+  x.fillText("d = "+d+" m, θ = "+num("ang")+"°",(ex+gx)/2+6,(ey+gy)/2-8);
+  car(x,ex,ey,0,se,css("--ego"),css("--ego")+"55");
+  car(x,gx,gy,th,se,css("--gt"),css("--gt")+"55");
+  if(S0&&S0.det){const [qx,qy]=P(tx+cl(S0.ex),ty+cl(S0.ey));car(x,qx,qy,th+cl(S0.eh),se,css("--est"),css("--est")+"33",[5,3]);}
+  else if(S0){x.fillStyle="#e03131";x.font="600 14px system-ui";x.fillText("Object NOT detected",12,22);}
+}
+function drawZoom(){
+  const [x,w,h]=setup($("zoom")), th=num("hdg"), S0=st.s;
+  let m=2; if(S0&&S0.det)m=Math.max(m,Math.abs(cl(S0.ex)),Math.abs(cl(S0.ey)));
+  st.cloud.forEach(q=>{m=Math.max(m,Math.abs(cl(q[0])),Math.abs(cl(q[1])));});
+  const s=Math.min(45,Math.min(w,h)*.45/(m+3)), cx=w/2, cy=h/2;
+  x.clearRect(0,0,w,h);x.strokeStyle=css("--grid");x.lineWidth=1;
+  x.beginPath();x.moveTo(0,cy);x.lineTo(w,cy);x.moveTo(cx,0);x.lineTo(cx,h);x.stroke();
+  car(x,cx,cy,th,s,css("--gt"),css("--gt")+"55");
+  x.fillStyle=css("--est");
+  st.cloud.forEach(q=>{x.globalAlpha=.5;x.beginPath();x.arc(cx+cl(q[0])*s,cy-cl(q[1])*s,2.5,0,7);x.fill();});x.globalAlpha=1;
+  if(S0&&S0.det)car(x,cx+cl(S0.ex)*s,cy-cl(S0.ey)*s,th+cl(S0.eh),s,css("--est"),css("--est")+"33",[5,3]);
+  x.fillStyle=css("--mut");x.font="12px system-ui";x.fillText("scale: 1 m = "+s.toFixed(0)+" px",8,h-8);
+}
+function readout(){
+  const d=num("dist"), a=num("ang"), p=cfg().p(d), S0=st.s, th=num("hdg");
+  let t="<div>Detection probability p = <b>"+p.toFixed(3)+"</b></div>";
+  if(st.n)t+="<div>Samples: "+st.n+" ("+st.k+" detected, "+(100*st.k/st.n).toFixed(1)+"%)</div>";
+  if(S0){
+    t+="<div>Object detected? <span class='"+(S0.det?"ok'>YES":"no'>NO")+"</span></div>";
+    if(S0.det){
+      const tx=d*Math.cos(a*Math.PI/180), ty=d*Math.sin(a*Math.PI/180);
+      t+="<div>Est. position: x = <b>"+f(tx+S0.ex,2)+"</b> m, y = <b>"+f(ty+S0.ey,2)+"</b> m</div>"+
+         "<div>Position error: x = "+f(S0.ex,2)+" m, y = "+f(S0.ey,2)+" m</div>"+
+         "<div>Est. heading: <b>"+f(th+S0.eh,1)+"°</b> (error "+f(S0.eh,1)+"°)</div>"+
+         "<div>Existence probability: <b>"+S0.ee.toFixed(2)+"</b></div>";
+    }
+  }
+  $("out").innerHTML=t;
+}
+function draw(){drawMain();drawZoom();readout();}
+function gen(n){
+  const c=cfg(), d=num("dist");
+  for(let i=0;i<n;i++){const r=sample(c,d);st.s=r;st.n++;if(r.det){st.k++;st.cloud.push([r.ex,r.ey]);}}
+  draw();
+}
+function reset(){st.s=null;st.cloud=[];st.n=0;st.k=0;sync();draw();}
+["lidar","stage","dist","ang","hdg"].forEach(id=>$(id).addEventListener("input",reset));
+$("g1").onclick=()=>gen(1); $("g100").onclick=()=>gen(100);
+addEventListener("resize",draw);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",draw);
+reset();
+</script></body></html>
