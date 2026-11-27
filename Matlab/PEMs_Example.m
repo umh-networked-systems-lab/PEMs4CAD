@@ -3,7 +3,7 @@ close all; clear all;
 rng('shuffle')
 
 % Select LiDAR type and perception stage
-lidar_type = "OS2-128";             % Available inputs: OS2-128, OS2-64 (coming soon), OS1-64 (coming soon)
+lidar_type = "OS2-128";             % Available inputs: OS2-128, OS2-64, OS1-64
 perception_stage = "detection";     % Available inputs: detection or validation
 
 % Set distance and angle of the target object relative to the ego-vehicle's
