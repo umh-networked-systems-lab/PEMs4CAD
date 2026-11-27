@@ -15,6 +15,8 @@ This repository contains the first set of openly available PEMs for connected an
 <img src="./CoordinateSystem.png" alt="drawing" width="500"/>
 </div>
 
+Explain how to run the examples. 
+
 PEMs are designed as lightweight statistical models calibrated on a synthetic dataset of perception metrics collected comparing the ground-truth obejct states provided by CARLA-SUMO co-simulations and the output of the perception of an Autopware-based ego-vehicle. 
 
 We release PEMs for three different types of LiDAR. 
